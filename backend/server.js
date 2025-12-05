@@ -1,7 +1,10 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import admin from 'firebase-admin';
+// ❌ REMOVIDO: import admin from 'firebase-admin';
+
+// 🟢 NOVO: A importação desta linha força a inicialização do Firebase Admin SDK.
+import admin, { db } from './config/firebase.js'; 
 
 // Importar rotas
 import productsRouter from './routes/products.js';
@@ -21,31 +24,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Inicializar Firebase Admin
-const serviceAccount = {
-  type: "service_account",
-  project_id: process.env.FIREBASE_PROJECT_ID || "sansei-d3cf6",
-  private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
-  private_key: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
-  client_email: process.env.FIREBASE_CLIENT_EMAIL,
-  client_id: process.env.FIREBASE_CLIENT_ID,
-  auth_uri: "https://accounts.google.com/o/oauth2/auth",
-  token_uri: "https://oauth2.googleapis.com/token",
-  auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
-  client_x509_cert_url: process.env.FIREBASE_CERT_URL
-};
-
-// Inicializar Firebase apenas se as credenciais estiverem disponíveis
-if (process.env.FIREBASE_PRIVATE_KEY && process.env.FIREBASE_CLIENT_EMAIL) {
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-  });
-  console.log('✅ Firebase Admin inicializado');
-} else {
-  console.warn('⚠️  Firebase Admin não inicializado - usando modo de desenvolvimento');
-}
-
-export const db = admin.firestore();
+// ❌ REMOVIDO: O bloco de inicialização do Firebase Admin foi movido para config/firebase.js
 
 // Rotas
 app.get('/', (req, res) => {
