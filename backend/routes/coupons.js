@@ -1,8 +1,9 @@
 import express from 'express';
-import admin from 'firebase-admin';
+// ❌ ANTES: import admin from 'firebase-admin';
+import admin, { db } from '../config/firebase.js'; // 🟢 NOVO: Importa instâncias prontas
 
 const router = express.Router();
-const db = admin.firestore();
+// ❌ REMOVIDO: const db = admin.firestore();
 
 // GET - Listar todos os cupons
 router.get('/', async (req, res) => {
@@ -45,54 +46,44 @@ router.post('/validate', async (req, res) => {
       .get();
     
     if (snapshot.empty) {
-      return res.status(404).json({ success: false, error: 'Cupom não encontrado' });
+      return res.status(404).json({ success: false, error: 'Cupom não encontrado ou inválido' });
     }
     
     const couponDoc = snapshot.docs[0];
     const coupon = { id: couponDoc.id, ...couponDoc.data() };
     
-    // Validações
+    // 1. Verificar se está ativo
     if (!coupon.active) {
       return res.status(400).json({ success: false, error: 'Cupom inativo' });
     }
     
-    if (coupon.expiresAt && coupon.expiresAt.toDate() < new Date()) {
-      return res.status(400).json({ success: false, error: 'Cupom expirado' });
+    // 2. Verificar data de expiração
+    if (coupon.expirationDate && new Date(coupon.expirationDate.toDate()) < new Date()) {
+        return res.status(400).json({ success: false, error: 'Cupom expirado' });
+    }
+
+    // 3. Verificar valor mínimo de compra
+    if (coupon.minPurchase && parseFloat(subtotal) < coupon.minPurchase) {
+      return res.status(400).json({ success: false, error: `Valor mínimo de compra de R$ ${coupon.minPurchase.toFixed(2)} não atingido` });
+    }
+
+    // 4. Calcular desconto
+    let discount = 0;
+    if (coupon.type === 'fixed') {
+      discount = coupon.value;
+    } else if (coupon.type === 'percentage') {
+      discount = parseFloat(subtotal) * (coupon.value / 100);
     }
     
-    if (coupon.usageLimit && coupon.usageCount >= coupon.usageLimit) {
-      return res.status(400).json({ success: false, error: 'Cupom esgotado' });
-    }
-    
-    if (coupon.minPurchase && subtotal < coupon.minPurchase) {
-      return res.status(400).json({ 
-        success: false, 
-        error: `Valor mínimo de compra: R$ ${coupon.minPurchase.toFixed(2)}` 
-      });
-    }
-    
-    // Calcular desconto
-    let discountAmount = 0;
-    if (coupon.discountType === 'percentage') {
-      discountAmount = subtotal * (coupon.discountValue / 100);
-      if (coupon.maxDiscount && discountAmount > coupon.maxDiscount) {
-        discountAmount = coupon.maxDiscount;
-      }
-    } else if (coupon.discountType === 'fixed') {
-      discountAmount = coupon.discountValue;
+    // 5. Aplicar limite máximo de desconto (se houver)
+    if (coupon.maxDiscount && discount > coupon.maxDiscount) {
+      discount = coupon.maxDiscount;
     }
     
     res.json({ 
       success: true, 
-      coupon: {
-        id: coupon.id,
-        code: coupon.code,
-        description: coupon.description,
-        discountType: coupon.discountType,
-        discountValue: coupon.discountValue,
-        discountAmount: discountAmount
-      },
-      discountAmount
+      coupon,
+      discount: parseFloat(discount.toFixed(2)) 
     });
   } catch (error) {
     console.error('Erro ao validar cupom:', error);
@@ -100,53 +91,20 @@ router.post('/validate', async (req, res) => {
   }
 });
 
-// POST - Criar cupom
+// POST - Criar novo cupom
 router.post('/', async (req, res) => {
   try {
-    const {
-      code,
-      description,
-      discountType, // 'percentage' ou 'fixed'
-      discountValue,
-      minPurchase,
-      maxDiscount,
-      usageLimit,
-      expiresAt,
-      active = true
-    } = req.body;
-    
-    // Validações
-    if (!code || !discountType || !discountValue) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Dados obrigatórios faltando' 
-      });
-    }
-    
-    // Verificar se código já existe
-    const existingCoupon = await db.collection('coupons')
-      .where('code', '==', code.toUpperCase())
-      .limit(1)
-      .get();
-    
-    if (!existingCoupon.empty) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Código de cupom já existe' 
-      });
-    }
+    const { code, type, value, minPurchase, maxDiscount, expirationDate, active = true } = req.body;
     
     const couponData = {
       code: code.toUpperCase(),
-      description: description || '',
-      discountType,
-      discountValue: parseFloat(discountValue),
-      minPurchase: minPurchase ? parseFloat(minPurchase) : null,
-      maxDiscount: maxDiscount ? parseFloat(maxDiscount) : null,
-      usageLimit: usageLimit ? parseInt(usageLimit) : null,
+      type: type, // 'fixed' ou 'percentage'
+      value: parseFloat(value),
+      minPurchase: parseFloat(minPurchase) || 0,
+      maxDiscount: parseFloat(maxDiscount) || null,
+      expirationDate: expirationDate ? admin.firestore.Timestamp.fromDate(new Date(expirationDate)) : null,
+      active: active,
       usageCount: 0,
-      expiresAt: expiresAt ? admin.firestore.Timestamp.fromDate(new Date(expiresAt)) : null,
-      active,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     };
@@ -173,6 +131,16 @@ router.put('/:id', async (req, res) => {
       ...req.body,
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     };
+    
+    // Converte a data se for fornecida
+    if (updateData.expirationDate) {
+        updateData.expirationDate = admin.firestore.Timestamp.fromDate(new Date(updateData.expirationDate));
+    }
+
+    // Garante que o código seja uppercase se for alterado
+    if (updateData.code) {
+        updateData.code = updateData.code.toUpperCase();
+    }
     
     delete updateData.id;
     delete updateData.createdAt;
@@ -220,10 +188,10 @@ router.patch('/:id/use', async (req, res) => {
     
     res.json({ 
       success: true, 
-      message: 'Uso do cupom registrado'
+      message: 'Contagem de uso do cupom atualizada com sucesso'
     });
   } catch (error) {
-    console.error('Erro ao registrar uso:', error);
+    console.error('Erro ao atualizar uso do cupom:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
