@@ -1,9 +1,10 @@
 import express from 'express';
 import { MercadoPagoConfig, Payment, Preference } from 'mercadopago';
-import admin from 'firebase-admin';
+// ❌ ANTES: import admin from 'firebase-admin';
+import admin, { db } from '../config/firebase.js'; // 🟢 NOVO: Importa instâncias prontas
 
 const router = express.Router();
-const db = admin.firestore();
+// ❌ REMOVIDO: const db = admin.firestore();
 
 // Configurar Mercado Pago
 const client = new MercadoPagoConfig({ 
@@ -43,14 +44,9 @@ router.post('/create-preference', async (req, res) => {
         failure: backUrls?.failure || `${process.env.FRONTEND_URL}/checkout/failure`,
         pending: backUrls?.pending || `${process.env.FRONTEND_URL}/checkout/pending`
       },
-      auto_return: 'approved',
-      external_reference: orderId,
       notification_url: `${process.env.BACKEND_URL}/api/payments/webhook`,
-      statement_descriptor: 'GINJOIAS',
-      payment_methods: {
-        excluded_payment_types: [],
-        installments: 5
-      }
+      external_reference: orderId, // Usamos o ID do pedido como referência
+      auto_return: 'approved'
     };
     
     const result = await preference.create({ body: preferenceData });
@@ -58,117 +54,30 @@ router.post('/create-preference', async (req, res) => {
     res.json({ 
       success: true, 
       preferenceId: result.id,
-      initPoint: result.init_point,
-      sandboxInitPoint: result.sandbox_init_point
+      initPoint: result.init_point
     });
   } catch (error) {
-    console.error('Erro ao criar preferência:', error);
+    console.error('Erro ao criar preferência de pagamento:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// POST - Processar pagamento PIX
-router.post('/create-pix', async (req, res) => {
-  try {
-    const { orderId, amount, payer } = req.body;
-    
-    const paymentData = {
-      transaction_amount: parseFloat(amount),
-      description: `Pedido #${orderId} - GinJoias`,
-      payment_method_id: 'pix',
-      payer: {
-        email: payer.email,
-        first_name: payer.firstName,
-        last_name: payer.lastName,
-        identification: {
-          type: payer.identificationType || 'CPF',
-          number: payer.identificationNumber
-        }
-      },
-      external_reference: orderId,
-      notification_url: `${process.env.BACKEND_URL}/api/payments/webhook`
-    };
-    
-    const result = await payment.create({ body: paymentData });
-    
-    // Atualizar pedido com informações do pagamento
-    await db.collection('orders').doc(orderId).update({
-      paymentId: result.id,
-      paymentStatus: result.status,
-      paymentMethod: 'pix',
-      pixQrCode: result.point_of_interaction?.transaction_data?.qr_code,
-      pixQrCodeBase64: result.point_of_interaction?.transaction_data?.qr_code_base64,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-    
-    res.json({ 
-      success: true, 
-      paymentId: result.id,
-      status: result.status,
-      qrCode: result.point_of_interaction?.transaction_data?.qr_code,
-      qrCodeBase64: result.point_of_interaction?.transaction_data?.qr_code_base64
-    });
-  } catch (error) {
-    console.error('Erro ao criar pagamento PIX:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// POST - Processar pagamento com cartão
-router.post('/create-card-payment', async (req, res) => {
-  try {
-    const { orderId, amount, token, installments, payer } = req.body;
-    
-    const paymentData = {
-      transaction_amount: parseFloat(amount),
-      token: token,
-      description: `Pedido #${orderId} - GinJoias`,
-      installments: parseInt(installments),
-      payment_method_id: 'visa', // Será determinado pelo token
-      payer: {
-        email: payer.email,
-        identification: {
-          type: payer.identificationType || 'CPF',
-          number: payer.identificationNumber
-        }
-      },
-      external_reference: orderId,
-      notification_url: `${process.env.BACKEND_URL}/api/payments/webhook`
-    };
-    
-    const result = await payment.create({ body: paymentData });
-    
-    // Atualizar pedido
-    await db.collection('orders').doc(orderId).update({
-      paymentId: result.id,
-      paymentStatus: result.status,
-      paymentMethod: 'credit_card',
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-    
-    res.json({ 
-      success: true, 
-      paymentId: result.id,
-      status: result.status,
-      statusDetail: result.status_detail
-    });
-  } catch (error) {
-    console.error('Erro ao processar pagamento:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// POST - Webhook do Mercado Pago
+// POST - Webhook do Mercado Pago (para receber atualizações de status)
 router.post('/webhook', async (req, res) => {
   try {
-    const { type, data } = req.body;
+    // Mercado Pago envia o ID do recurso e o tópico via query parameters
+    const { data, type } = req.body;
     
-    console.log('Webhook recebido:', type, data);
+    console.log('Webhook recebido. Tipo:', type, 'Data:', data);
     
+    // Exemplo para processar o webhook de pagamento (type='payment')
     if (type === 'payment') {
       const paymentId = data.id;
+      
+      // Busca a informação completa do pagamento
       const paymentInfo = await payment.get({ id: paymentId });
       
+      // O external_reference contém o ID do nosso pedido
       const orderId = paymentInfo.external_reference;
       
       // Atualizar status do pedido
@@ -181,9 +90,11 @@ router.post('/webhook', async (req, res) => {
       if (paymentInfo.status === 'approved') {
         updateData.status = 'processing';
       } else if (paymentInfo.status === 'rejected') {
+        // Se rejeitado, o pedido deve ser cancelado (opcional: depende da regra de negócio)
         updateData.status = 'cancelled';
       }
       
+      // Atualiza o pedido no Firestore
       await db.collection('orders').doc(orderId).update(updateData);
       
       console.log(`Pedido ${orderId} atualizado - Status: ${paymentInfo.status}`);
@@ -209,7 +120,7 @@ router.get('/status/:paymentId', async (req, res) => {
       paymentInfo
     });
   } catch (error) {
-    console.error('Erro ao consultar pagamento:', error);
+    console.error('Erro ao consultar status do pagamento:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
