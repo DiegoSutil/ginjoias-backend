@@ -1,13 +1,9 @@
-// /app/config/firebase.js
-
-import * as admin from 'firebase-admin'; // CORREÇÃO: Garante que 'admin' não é undefined
+import * as admin from 'firebase-admin'; // 👈 CORREÇÃO ESSENCIAL: Garante que 'admin' não é undefined
 import dotenv from 'dotenv';
 
-// Garante que as variáveis de ambiente sejam carregadas.
 dotenv.config();
 
-// Inicializar Firebase Admin
-// Usamos os nomes EXATOS das variáveis de ambiente que você forneceu.
+// Inicializar Firebase Admin. Usamos os nomes EXATOS das variáveis de ambiente.
 const serviceAccount = {
   // Variáveis com nome minúsculo
   type: process.env.type || "service_account",
@@ -20,17 +16,16 @@ const serviceAccount = {
   client_x509_cert_url: process.env.client_x509_cert_url,
   universe_domain: process.env.universe_domain,
   
-  // Variáveis com nome MAIÚSCULO
+  // Variável com nome MAIÚSCULO
   private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
   
-  // A chave privada: USAMOS process.env.private_key (minúsculo)
-  // O .replace() é mantido para converter '\n' literais em quebras de linha reais.
+  // A chave privada: USANDO process.env.private_key (minúsculo). 
+  // O .replace() é crucial para formatar a chave corretamente.
   private_key: process.env.private_key?.replace(/\\n/g, '\n'), 
 };
 
-// Se a chave privada ou email de cliente estiverem faltando, 
-// o processo de inicialização será ignorado, evitando crashes.
-if (admin.apps.length === 0) { // Linha 31 (agora corrigida)
+// Linha 33 (Local onde o erro estava ocorrendo)
+if (admin.apps.length === 0) {
     if (process.env.private_key && process.env.client_email) {
       try {
         admin.initializeApp({
