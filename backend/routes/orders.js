@@ -1,8 +1,9 @@
 import express from 'express';
-import admin from 'firebase-admin';
+// ❌ ANTES: import admin from 'firebase-admin';
+import admin, { db } from '../config/firebase.js'; // 🟢 NOVO: Importa instâncias prontas
 
 const router = express.Router();
-const db = admin.firestore();
+// ❌ REMOVIDO: const db = admin.firestore();
 
 // GET - Listar todos os pedidos (com filtros opcionais)
 router.get('/', async (req, res) => {
@@ -54,100 +55,92 @@ router.get('/:id', async (req, res) => {
 
 // POST - Criar novo pedido
 router.post('/', async (req, res) => {
-  try {
-    const {
-      userId,
-      userEmail,
-      items,
-      shippingAddress,
-      paymentMethod,
-      subtotal,
-      shippingCost,
-      discount,
-      total,
-      couponCode
-    } = req.body;
-    
-    // Validar dados obrigatórios
-    if (!userId || !items || items.length === 0 || !shippingAddress || !paymentMethod) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Dados obrigatórios faltando' 
-      });
-    }
-    
-    // Verificar estoque dos produtos
-    for (const item of items) {
-      const productDoc = await db.collection('products').doc(item.productId).get();
-      if (!productDoc.exists) {
-        return res.status(400).json({ 
-          success: false, 
-          error: `Produto ${item.productId} não encontrado` 
-        });
-      }
+  // O ideal é usar uma transaction para garantir a atomicidade (atualizar estoque e criar pedido)
+  const t = db.runTransaction(async (transaction) => {
+    try {
+      const { userId, items, shippingAddress, paymentMethod, shippingCost, subtotal, total, couponCode } = req.body;
       
-      const product = productDoc.data();
-      if (product.stock < item.quantity) {
-        return res.status(400).json({ 
-          success: false, 
-          error: `Estoque insuficiente para ${product.name}` 
+      const orderData = {
+        userId,
+        items,
+        shippingAddress,
+        paymentMethod,
+        shippingCost: parseFloat(shippingCost) || 0,
+        subtotal: parseFloat(subtotal),
+        total: parseFloat(total),
+        couponCode: couponCode || null,
+        status: 'pending', // pending, processing, shipped, delivered, cancelled
+        paymentStatus: 'pending', // pending, approved, rejected
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      };
+      
+      // 1. Verificar e decrementar estoque
+      for (const item of items) {
+        const productRef = db.collection('products').doc(item.productId);
+        const productDoc = await transaction.get(productRef);
+        
+        if (!productDoc.exists) {
+          throw new Error(`Produto não encontrado: ${item.productId}`);
+        }
+        
+        const currentStock = productDoc.data().stock;
+        const requiredQuantity = item.quantity;
+        
+        if (currentStock < requiredQuantity) {
+          throw new Error(`Estoque insuficiente para ${productDoc.data().name}. Disponível: ${currentStock}`);
+        }
+        
+        // Decrementar estoque dentro da transação
+        transaction.update(productRef, {
+          stock: currentStock - requiredQuantity,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
         });
       }
+
+      // 2. Criar o pedido
+      const orderRef = db.collection('orders').doc();
+      transaction.set(orderRef, orderData);
+      
+      return { orderId: orderRef.id, ...orderData };
+    } catch (error) {
+      // Rejeita a transação
+      throw error;
     }
-    
-    const orderData = {
-      userId,
-      userEmail,
-      items,
-      shippingAddress,
-      paymentMethod,
-      subtotal: parseFloat(subtotal),
-      shippingCost: parseFloat(shippingCost) || 0,
-      discount: parseFloat(discount) || 0,
-      total: parseFloat(total),
-      couponCode: couponCode || null,
-      status: 'pending', // pending, processing, shipped, delivered, cancelled
-      paymentStatus: 'pending', // pending, paid, failed, refunded
-      trackingCode: null,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    };
-    
-    const docRef = await db.collection('orders').add(orderData);
-    
-    // Atualizar estoque dos produtos
-    for (const item of items) {
-      const productRef = db.collection('products').doc(item.productId);
-      await productRef.update({
-        stock: admin.firestore.FieldValue.increment(-item.quantity)
-      });
-    }
-    
+  });
+  
+  try {
+    const order = await t;
     res.status(201).json({ 
       success: true, 
       message: 'Pedido criado com sucesso',
-      orderId: docRef.id,
-      order: { id: docRef.id, ...orderData }
+      orderId: order.orderId,
+      order: order
     });
   } catch (error) {
     console.error('Erro ao criar pedido:', error);
-    res.status(500).json({ success: false, error: error.message });
+    // Erros da transação são capturados aqui
+    res.status(400).json({ success: false, error: error.message });
   }
 });
 
-// PATCH - Atualizar status do pedido
-router.patch('/:id/status', async (req, res) => {
+// PUT - Atualizar status do pedido (Geralmente usado por Admin/Webhooks de Pagamento)
+router.put('/:id/status', async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, paymentStatus, trackingCode } = req.body;
+    const { status, paymentStatus } = req.body;
     
     const updateData = {
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     };
     
-    if (status) updateData.status = status;
-    if (paymentStatus) updateData.paymentStatus = paymentStatus;
-    if (trackingCode) updateData.trackingCode = trackingCode;
+    if (status) {
+      updateData.status = status;
+    }
+    
+    if (paymentStatus) {
+      updateData.paymentStatus = paymentStatus;
+    }
     
     await db.collection('orders').doc(id).update(updateData);
     
@@ -164,46 +157,56 @@ router.patch('/:id/status', async (req, res) => {
 
 // DELETE - Cancelar pedido
 router.delete('/:id', async (req, res) => {
+  // Usar transaction para garantir que o estoque seja devolvido
+  const t = db.runTransaction(async (transaction) => {
+    try {
+      const { id } = req.params;
+      const orderRef = db.collection('orders').doc(id);
+      const orderDoc = await transaction.get(orderRef);
+      
+      if (!orderDoc.exists) {
+        throw new Error('Pedido não encontrado');
+      }
+      
+      const order = orderDoc.data();
+      
+      // Só permite cancelar se estiver pendente ou processando (depende da sua regra de negócio)
+      if (order.status !== 'pending') {
+        throw new Error('Apenas pedidos pendentes podem ser cancelados');
+      }
+      
+      // Devolver estoque
+      for (const item of order.items) {
+        const productRef = db.collection('products').doc(item.productId);
+        // Incrementar estoque dentro da transação
+        transaction.update(productRef, {
+          stock: admin.firestore.FieldValue.increment(item.quantity)
+        });
+      }
+      
+      // Atualizar status para cancelado
+      transaction.update(orderRef, {
+        status: 'cancelled',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      return { message: 'Pedido cancelado com sucesso', orderId: id };
+
+    } catch (error) {
+      throw error;
+    }
+  });
+
   try {
-    const { id } = req.params;
-    const orderDoc = await db.collection('orders').doc(id).get();
-    
-    if (!orderDoc.exists) {
-      return res.status(404).json({ success: false, error: 'Pedido não encontrado' });
-    }
-    
-    const order = orderDoc.data();
-    
-    // Só permite cancelar se estiver pendente
-    if (order.status !== 'pending') {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Apenas pedidos pendentes podem ser cancelados' 
-      });
-    }
-    
-    // Devolver estoque
-    for (const item of order.items) {
-      const productRef = db.collection('products').doc(item.productId);
-      await productRef.update({
-        stock: admin.firestore.FieldValue.increment(item.quantity)
-      });
-    }
-    
-    // Atualizar status para cancelado
-    await db.collection('orders').doc(id).update({
-      status: 'cancelled',
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-    
+    const result = await t;
     res.json({ 
       success: true, 
-      message: 'Pedido cancelado com sucesso',
-      orderId: id
+      message: result.message,
+      orderId: result.orderId
     });
   } catch (error) {
     console.error('Erro ao cancelar pedido:', error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(400).json({ success: false, error: error.message });
   }
 });
 
