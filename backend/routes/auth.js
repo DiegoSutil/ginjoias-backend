@@ -1,8 +1,9 @@
 import express from 'express';
-import admin from 'firebase-admin';
+// ❌ ANTES: import admin from 'firebase-admin';
+import admin, { db, auth } from '../config/firebase.js'; // 🟢 NOVO: Importa instâncias prontas (incluindo auth)
 
 const router = express.Router();
-const db = admin.firestore();
+// ❌ REMOVIDO: const db = admin.firestore();
 
 // POST - Verificar token do Firebase
 router.post('/verify', async (req, res) => {
@@ -13,7 +14,8 @@ router.post('/verify', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Token não fornecido' });
     }
     
-    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    // 🟢 Usa 'auth' importado do módulo de configuração
+    const decodedToken = await auth.verifyIdToken(idToken);
     const uid = decodedToken.uid;
     
     // Buscar ou criar dados do usuário no Firestore
@@ -47,58 +49,18 @@ router.post('/verify', async (req, res) => {
         email: decodedToken.email,
         displayName: userData.displayName,
         role: userData.role,
-        photoURL: userData.photoURL
+        cart: userData.cart || [],
+        wishlist: userData.wishlist || [],
+        addresses: userData.addresses || [],
+        photoURL: userData.photoURL || null
       }
     });
   } catch (error) {
     console.error('Erro ao verificar token:', error);
-    res.status(401).json({ success: false, error: 'Token inválido' });
-  }
-});
-
-// GET - Buscar dados do usuário
-router.get('/user/:uid', async (req, res) => {
-  try {
-    const { uid } = req.params;
-    const userDoc = await db.collection('users').doc(uid).get();
-    
-    if (!userDoc.exists) {
-      return res.status(404).json({ success: false, error: 'Usuário não encontrado' });
+    // Firebase auth errors
+    if (error.code && error.code.startsWith('auth/')) {
+        return res.status(401).json({ success: false, error: 'Token inválido ou expirado' });
     }
-    
-    const userData = userDoc.data();
-    delete userData.cart; // Não enviar carrinho completo
-    
-    res.json({ success: true, user: userData });
-  } catch (error) {
-    console.error('Erro ao buscar usuário:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// PUT - Atualizar perfil do usuário
-router.put('/user/:uid', async (req, res) => {
-  try {
-    const { uid } = req.params;
-    const { displayName, photoURL, phone, addresses } = req.body;
-    
-    const updateData = {
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    };
-    
-    if (displayName) updateData.displayName = displayName;
-    if (photoURL) updateData.photoURL = photoURL;
-    if (phone) updateData.phone = phone;
-    if (addresses) updateData.addresses = addresses;
-    
-    await db.collection('users').doc(uid).update(updateData);
-    
-    res.json({ 
-      success: true, 
-      message: 'Perfil atualizado com sucesso'
-    });
-  } catch (error) {
-    console.error('Erro ao atualizar perfil:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -138,13 +100,15 @@ router.put('/user/:uid/wishlist', async (req, res) => {
       updateData.wishlist = admin.firestore.FieldValue.arrayUnion(productId);
     } else if (action === 'remove') {
       updateData.wishlist = admin.firestore.FieldValue.arrayRemove(productId);
+    } else {
+      return res.status(400).json({ success: false, error: 'Ação inválida para wishlist' });
     }
     
     await db.collection('users').doc(uid).update(updateData);
     
     res.json({ 
       success: true, 
-      message: 'Lista de desejos atualizada'
+      message: 'Wishlist atualizada com sucesso'
     });
   } catch (error) {
     console.error('Erro ao atualizar wishlist:', error);
