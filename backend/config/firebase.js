@@ -1,4 +1,5 @@
-import * as admin from 'firebase-admin'; // 👈 CORREÇÃO ESSENCIAL: Garante que 'admin' não é undefined
+
+import * as admin from 'firebase-admin'; 
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -19,12 +20,11 @@ const serviceAccount = {
   // Variável com nome MAIÚSCULO
   private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
   
-  // A chave privada: USANDO process.env.private_key (minúsculo). 
-  // O .replace() é crucial para formatar a chave corretamente.
+  // A chave privada: O .replace() é crucial para formatar a chave corretamente.
   private_key: process.env.private_key?.replace(/\\n/g, '\n'), 
 };
 
-// Linha 33 (Local onde o erro estava ocorrendo)
+// Linha 33 (Onde o erro ocorre, mas agora 'admin' está definido)
 if (admin.apps.length === 0) {
     if (process.env.private_key && process.env.client_email) {
       try {
