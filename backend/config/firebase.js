@@ -1,11 +1,16 @@
 // /app/config/firebase.js
 
-// 🟢 ESSENCIAL: Garante que 'admin' não é undefined ao usar módulos ES
-import * as admin from 'firebase-admin'; 
+// 🛑 IMPORTAÇÃO CRÍTICA PARA MÓDULOS ES: Importa o resolvedor de require
+import { createRequire } from 'module'; 
 import dotenv from 'dotenv';
 
 dotenv.config();
 
+// 🟢 NOVO: Cria a função 'require' para importar o pacote CommonJS
+const require = createRequire(import.meta.url);
+const admin = require('firebase-admin');
+
+// Variáveis para as instâncias de serviço
 let db;
 let auth;
 
@@ -20,12 +25,13 @@ const serviceAccount = {
   client_x509_cert_url: process.env.client_x509_cert_url,
   universe_domain: process.env.universe_domain,
   private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
+  // A chave privada: O .replace() é crucial para formatar a chave corretamente.
   private_key: process.env.private_key?.replace(/\\n/g, '\n'), 
 };
 
 // 1. Inicialização do Firebase Admin
 function initializeFirebase() {
-    // Agora, 'admin' deve estar corretamente definido por causa da Linha 4.
+    // 🟢 ESTA LINHA AGORA DEVE FUNCIONAR: 'admin' está definido pelo require
     if (admin.apps.length === 0) {
         if (process.env.private_key && process.env.client_email) {
           try {
@@ -52,4 +58,4 @@ initializeFirebase();
 
 // 4. Exportar as instâncias
 export { db, auth };
-export default admin; // Exporta admin para uso de FieldValue.serverTimestamp()
+export default admin;
