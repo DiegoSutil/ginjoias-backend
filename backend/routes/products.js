@@ -1,14 +1,11 @@
 import express from 'express';
-// ❌ ANTES: import admin from 'firebase-admin';
-// ✅ DEPOIS: Importa o admin e o db já inicializados.
-import admin, { db } from '../config/firebase.js'; 
+import admin from 'firebase-admin';
 
 const router = express.Router();
-// ❌ REMOVIDO: const db = admin.firestore();
+const db = admin.firestore();
 
 // GET - Listar todos os produtos
 router.get('/', async (req, res) => {
-// ... (o restante do seu código permanece o mesmo, pois 'db' e 'admin' estão disponíveis) ...
   try {
     const { category, minPrice, maxPrice, search, limit = 50 } = req.query;
     
