@@ -1,12 +1,15 @@
+// /app/config/firebase.js
 
+// 🟢 ESSENCIAL: Garante que 'admin' não é undefined ao usar módulos ES
 import * as admin from 'firebase-admin'; 
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Inicializar Firebase Admin. Usamos os nomes EXATOS das variáveis de ambiente.
+let db;
+let auth;
+
 const serviceAccount = {
-  // Variáveis com nome minúsculo
   type: process.env.type || "service_account",
   project_id: process.env.project_id || "sansei-d3cf6",
   client_email: process.env.client_email,
@@ -16,32 +19,37 @@ const serviceAccount = {
   auth_provider_x509_cert_url: process.env.auth_provider_x509_cert_url,
   client_x509_cert_url: process.env.client_x509_cert_url,
   universe_domain: process.env.universe_domain,
-  
-  // Variável com nome MAIÚSCULO
   private_key_id: process.env.FIREBASE_PRIVATE_KEY_ID,
-  
-  // A chave privada: O .replace() é crucial para formatar a chave corretamente.
   private_key: process.env.private_key?.replace(/\\n/g, '\n'), 
 };
 
-// Linha 33 (Onde o erro ocorre, mas agora 'admin' está definido)
-if (admin.apps.length === 0) {
-    if (process.env.private_key && process.env.client_email) {
-      try {
-        admin.initializeApp({
-          credential: admin.credential.cert(serviceAccount)
-        });
-        console.log('✅ Firebase Admin inicializado com sucesso.');
-      } catch (e) {
-        console.error('❌ Erro durante initializeApp. Verifique a formatação da chave privada (private_key):', e.message);
-        throw e;
-      }
-    } else {
-      console.warn('⚠️  Firebase Admin não inicializado. Variáveis de ambiente (private_key ou client_email) faltando.');
+// 1. Inicialização do Firebase Admin
+function initializeFirebase() {
+    // Agora, 'admin' deve estar corretamente definido por causa da Linha 4.
+    if (admin.apps.length === 0) {
+        if (process.env.private_key && process.env.client_email) {
+          try {
+            admin.initializeApp({
+              credential: admin.credential.cert(serviceAccount)
+            });
+            console.log('✅ Firebase Admin inicializado com sucesso.');
+          } catch (e) {
+            console.error('❌ Erro durante initializeApp. Verifique a chave privada:', e.message);
+            throw e;
+          }
+        } else {
+          console.warn('⚠️  Firebase Admin não inicializado. Variáveis de ambiente faltando.');
+        }
     }
+
+    // 2. Definir as instâncias após a inicialização bem-sucedida
+    db = admin.firestore();
+    auth = admin.auth();
 }
 
-// Exporta o objeto 'admin' e a instância do Firestore 'db' e Auth 'auth' já inicializados.
-export const db = admin.firestore();
-export const auth = admin.auth();
-export default admin;
+// 3. Chamar a função imediatamente para inicializar
+initializeFirebase();
+
+// 4. Exportar as instâncias
+export { db, auth };
+export default admin; // Exporta admin para uso de FieldValue.serverTimestamp()
