@@ -72,10 +72,9 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Iniciar servidor
+const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando na porta ${PORT}`);
-  console.log(`📍 http://localhost:${PORT}`);
+  console.log(`Acesse a API em: http://localhost:${PORT}` );
 });
-
-export default app;
